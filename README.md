@@ -26,3 +26,6 @@
 </form>
 ```
 API returns requested info or success/failure message as JSON
+
+
+**NOTE:** in the database.php file, change the getLocalDB() credentials to whatever server your database is on. 
