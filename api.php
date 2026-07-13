@@ -71,13 +71,36 @@ elseif ($method === 'POST')
     switch ($action)
     {
         case 'place_order':
-            $part_number = $_POST['part_number'];
-            $qty = $_POST['quantity'];
-            $cc_number = $_POST['credit_card'];
+            // Extract information from front end
+            $part_numbers = $_POST['part_number'];  // array of parts
+            $quantities = $_POST['quantity'];              // array of qty
+            $name = $_POST['customer_name'];
+            $address = $_POST['shipping_address'];
+            $cc_number = $_POST['cc_number'];
+            $cc_exp = $_POST['cc_exp'];
+
+            $total_price = 0;
+
+            // Loop through parts being ordered and call price from legacy DB and multiply by quantity before adding to total_price variable
+            for ($i = 0; $i < count($part_numbers); $i++)
+            {
+                $current_part = $part_numbers[$i];
+                $current_qty = $quantities[$i];
+
+                // Ensure part number is integer
+                $part_number = intval($current_part);
+
+                // SELECT from legacy DB for a specific part
+                $stmt = $legacy_db->prepare("SELECT price FROM parts WHERE number = ?");
+                $stmt->execute([$current_part]);
+                $part = $stmt->fetch();
+                
+                $subtotal = $current_qty * $part['price'];
+                $total_price += $subtotal;
+            }
 
             // echo $part_number . $qty . $cc_number;
-            
-            $total_price = 0;
+
 
             break;
 
