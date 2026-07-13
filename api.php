@@ -92,15 +92,68 @@ elseif ($method === 'POST')
 
                 // SELECT from legacy DB for a specific part
                 $stmt = $legacy_db->prepare("SELECT price FROM parts WHERE number = ?");
-                $stmt->execute([$current_part]);
+                $stmt->execute([$part_number]);
                 $part = $stmt->fetch();
-                
+
                 $subtotal = $current_qty * $part['price'];
                 $total_price += $subtotal;
             }
 
             // echo $part_number . $qty . $cc_number;
 
+            // Authorize card
+            $url = 'http://blitz.cs.niu.edu/CreditCard/';
+
+            $data = array(
+                'vendor' => '1A',
+                'trans' => uniqid(),
+                'cc' => $cc_number,
+                'name' => $name,
+                'exp' => $cc_exp,
+                'amouunt' => $total_price);
+
+            // $authorization_data['cc_number'] = $cc_number;
+            // $authorization_data['cc_exp'] = $cc_exp;
+            // $authorization_data['amount'] = $total_price;
+            // $authorization_data['name'] = $name;
+            // $authorization_data['vendor_id'] = '1A';
+            // $authorization_data['transaction_id'] = uniqid();
+
+            $options = array(
+                'http' => array(
+                    'header' => array('Content-type: application/json', 'Accept: application/json'),
+                    'method' => 'POST',
+                    'content' => json_encode($data)
+                )
+            );
+
+            $context  = stream_context_create($options);
+            $result = file_get_contents($url, false, $context);
+
+            $authorization_number = null;
+
+            if (str_starts_with($result, 'Error'))
+            {
+                // The card was declined or there was an issue
+                echo json_encode(["status" => "error", "message" => $result]);
+                exit;
+            }
+            else
+            {
+                $authorization_number = trim($result);
+                echo json_encode([
+                    "status" => "success",
+                    "message" => "Order placed successfully.",
+                    "transaction_id" => $data['$trans'],
+                    "authorization_number" => $result
+                ]);
+            }
+
+            // Save transaction to database
+            $local_db = getLocalDB();
+            $stmt = $local_db->prepare('Insert INTO Orders (customer_name, shipping_address, total_price, transaction_id) VALUES (?, ?, ?, ?)');
+
+            $stmt->execute([$name, $address, $total_price, $data['$trans']]);
 
             break;
 
