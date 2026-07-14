@@ -1,8 +1,12 @@
 <?php
+
+/**
+ * DEBUG:      REMOVE BEFORE SUBMISSION
+ */
 // var_dump($_POST); exit;
-ini_set('display_errors', 1);
-ini_set('display_startup_errors', 1);
-error_reporting(E_ALL);
+// ini_set('display_errors', 1);
+// ini_set('display_startup_errors', 1);
+// error_reporting(E_ALL);
 
 require_once 'database.php';
 
@@ -15,13 +19,13 @@ $method = $_SERVER['REQUEST_METHOD'];
 // If no action set, default to empty string
 $action = $_REQUEST['action'] ?? '';
 
-// Connect to legacy database
-$legacy_db = getLegacyDB();
 
 // GET HTTP requests
 if ($method === 'GET')
 {
 
+    // Connect to legacy database
+    $legacy_db = getLegacyDB();
 
     switch ($action)
     {
@@ -66,10 +70,11 @@ if ($method === 'GET')
 }
 elseif ($method === 'POST')
 {
-
-
     switch ($action)
     {
+        /**
+         * Processes shopping cart items by calculating their price based on price data from legacy databqase, 
+         */
         case 'place_order':
             // Extract information from front end
             $part_numbers = $_POST['part_number'];  // array of parts
@@ -82,6 +87,9 @@ elseif ($method === 'POST')
 
             $total_price = 0;
             $total_weight = 0;
+
+            // Connect to legacy database
+            $legacy_db = getLegacyDB();
 
             // Loop through parts being ordered and call price from legacy DB and multiply by quantity before adding to total_price variable
             for ($i = 0; $i < count($part_numbers); $i++)
@@ -110,7 +118,7 @@ elseif ($method === 'POST')
             $stmt->execute([$total_weight]);
             $shipping = $stmt->fetch();
 
-            // Set cost, defaulting to 0 if weight exceeds your highest bracket
+            // Set cost, defaulting to 0 if weight exceeds highest bracket
             $shipping_cost = $shipping ? $shipping['cost'] : 0;
 
             // Add to grand total
@@ -203,7 +211,9 @@ elseif ($method === 'POST')
 
             // Prepare OrderItem statements 
             $stmt_item = $local_db->prepare("INSERT INTO OrderItem (order_id, product_id, quantity, price) VALUES (?, ?, ?, ?)");
+
             $stmt_inventory = $local_db->prepare("UPDATE Inventory SET quantity_on_hand = quantity_on_hand - ? WHERE product_id = ?");
+
             $stmt_legacy = $legacy_db->prepare("SELECT price FROM parts WHERE number = ?");
 
             for ($i = 0; $i < count($part_numbers); $i++)
@@ -224,6 +234,9 @@ elseif ($method === 'POST')
 
             exit;
 
+        /**
+         * Query inventory
+         */
         case 'check_inventory':
             $part_number = intval($_POST['part_number']);
 
@@ -250,8 +263,93 @@ elseif ($method === 'POST')
             }
 
             exit;
+
         case 'update_inventory':
-            break;
+
+            // Get data from front end
+            $product_id = intval($_POST['product_id']);
+            $received_quantity = intval($_POST['quantity']);
+
+            $local_db = getLocalDB();
+
+            $stmt = $local_db->prepare("UPDATE Inventory SET quantity_on_hand = quantity_on_hand + ? WHERE product_id = ?");
+            $result = $stmt->execute([$received_quantity, $product_id]);
+
+            if ($result && $stmt->rowCount() > 0)
+            {
+                echo json_encode([
+                    "status" => "success",
+                    "message" => "Inventory received and updated.",
+                    "product_id" => $product_id,
+                    "quantity_added" => $received_quantity
+                ]);
+            }
+            else
+            {
+                echo json_encode([
+                    "status" => "error",
+                    "message" => "Failed to update inventory."
+                ]);
+            }
+            exit;
+
+        case 'update_status':
+            $order_id = intval($_POST['order_id']);
+            $new_status = $_POST['status'];
+
+            $local_db = getLocalDB();
+            $stmt = $local_db->prepare("UPDATE Orders SET status = ? WHERE order_id = ?");
+
+            $result = $stmt->execute([$new_status, $order_id]);
+
+            if ($result && $stmt->rowCount() > 0)
+            {
+                echo json_encode([
+                    "status" => "success",
+                    "message" => "Order status updated.",
+                    "order_id" => $order_id,
+                    "new_status" => $new_status
+                ]);
+            }
+            else
+            {
+                echo json_encode([
+                    "status" => "error",
+                    "message" => "Failed to update order."
+                ]);
+            }
+            exit;
+
+        case 'set_shipping_rates':
+            // Get front end data
+            $new_cost = doubleval($_POST['rate']);
+            $min_weight = doubleval($_POST['min_weight']);
+            $max_weight = doubleval($_POST['max_weight']);
+
+
+
+            $local_db = getLocalDB();
+
+            $stmt = $local_db->prepare("UPDATE ShippingRate SET cost = ? WHERE min_weight = ? AND max_weight = ?");
+
+            $result = $stmt->execute([$new_cost, $min_weight, $max_weight]);
+
+            if ($result && $stmt->rowCount() > 0)
+            {
+                echo json_encode([
+                    "status" => "success",
+                    "message" => "Shipping rate updated successfully.",
+                    "new_cost" => $new_cost
+                ]);
+            }
+            else
+            {
+                echo json_encode([
+                    "status" => "error",
+                    "message" => "Failed to update shipping rate."
+                ]);
+            }
+            exit;
 
         default:
             break;
