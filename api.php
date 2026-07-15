@@ -34,7 +34,7 @@ if ($method === 'GET')
             $stmt = $legacy_db->query("SELECT * FROM parts");
             $parts = $stmt->fetchAll();
             echo json_encode($parts);
-            break;
+            exit;
 
         case 'get_part':
             // Logic for a single part
@@ -60,12 +60,131 @@ if ($method === 'GET')
                 echo json_encode($part);
             }
 
-            break;
+            exit;
+
+        /**
+         * Query inventory
+         */
+        case 'check_inventory':
+            $part_number = intval($_GET['part_number']);
+
+            // Query the database
+            $local_db = getLocalDB();
+            $stmt = $local_db->prepare("SELECT quantity_on_hand FROM Inventory WHERE product_id = ?");
+            $stmt->execute([$part_number]);
+            $result = $stmt->fetch();
+
+            if ($result)
+            {
+                echo json_encode([
+                    "status" => "success",
+                    "part" => $part_number,
+                    "quantity" => $result['quantity_on_hand']
+                ]);
+            }
+            else
+            {
+                echo json_encode([
+                    "status" => "error",
+                    "message" => "Part not found in inventory."
+                ]);
+            }
+
+            exit;
+
+        /**
+         * Search for orders using date range, status, price range.
+         */
+        case 'search_orders':
+            $params = [];
+
+            $sql = "SELECT * FROM Orders WHERE 1=1";
+
+            // Check for date criteria
+            if (!empty($_GET['start_date']) && !empty('end_date'))
+            {
+                $sql .= " AND order_date BETWEEN ? AND ?";
+                $params[] = $_GET['start_date'];
+                $params[] = $_GET['end_date'];
+            }
+
+            // Check for status
+            if (!empty($_GET['status']))
+            {
+                $sql .= " AND STATUS = ?";
+                $params[] = $_GET['status'];
+            }
+
+            // Check for price range
+            if (!empty($_GET['min_price'] && !empty($_GET['max_price'])))
+            {
+                $sql .= " AND total_price BETWEEN ? AND ?";
+                $params[] = doubleval($_GET['min_price']);
+                $params[] = doubleval($_GET['max_price']);
+            }
+
+            // Prepare & execute final query string
+            $local_db = getLocalDB();
+            $stmt = $local_db->prepare($sql);
+            $stmt->execute($params);
+            $orders = $stmt->fetchAll();
+
+            // Return results
+            echo json_encode([
+                "status" => "success",
+                "data" => $orders
+            ]);
+
+            exit;
+
+
+        /**
+         * Retrieve order details using order_id
+         */
+        case 'get_order_details':
+            if (empty($_GET['order_id']))
+            {
+                echo json_encode([
+                    "status" => "error",
+                    "message" => "Missing order ID"
+                ]);
+            }
+
+            $order_id = intval($_GET['order_id']);
+            $local_db = getLocalDB();
+
+            // Fetch order record
+            $stmt_order = $local_db->prepare("SELECT * FROM Orders WHERE order_id = ?");
+            $stmt_order->execute([$order_id]);
+            $order = $stmt_order->fetch();
+
+            if (!$order)
+            {
+                echo json_encode([
+                    "status" => "error",
+                    "message" => "Order not found"
+                ]);
+            }
+
+            // Fetch associated line items for order
+            $stmt_items = $local_db->prepare("SELECT * FROM OrderItem WHERE order_id = ?");
+            $stmt_items->execute([$order_id]);
+            $items = $stmt_items->fetchAll();
+
+            // Combine results into JSON response
+            echo json_encode([
+                "status" => "success",
+                "order_info" => $order,
+                "items" => $items
+            ]);
+
+
+            exit;
 
         default:
             // If bad action sent
             echo json_encode(["error" => "Invalid action requested"]);
-            break;
+            exit;
     }
 }
 elseif ($method === 'POST')
@@ -234,36 +353,10 @@ elseif ($method === 'POST')
 
             exit;
 
+
         /**
-         * Query inventory
+         * 
          */
-        case 'check_inventory':
-            $part_number = intval($_POST['part_number']);
-
-            // Query the database
-            $local_db = getLocalDB();
-            $stmt = $local_db->prepare("SELECT quantity_on_hand FROM Inventory WHERE product_id = ?");
-            $stmt->execute([$part_number]);
-            $result = $stmt->fetch();
-
-            if ($result)
-            {
-                echo json_encode([
-                    "status" => "success",
-                    "part" => $part_number,
-                    "quantity" => $result['quantity_on_hand']
-                ]);
-            }
-            else
-            {
-                echo json_encode([
-                    "status" => "error",
-                    "message" => "Part not found in inventory."
-                ]);
-            }
-
-            exit;
-
         case 'update_inventory':
 
             // Get data from front end
@@ -330,25 +423,55 @@ elseif ($method === 'POST')
 
             $local_db = getLocalDB();
 
-            $stmt = $local_db->prepare("UPDATE ShippingRate SET cost = ? WHERE min_weight = ? AND max_weight = ?");
+            // Check if exact bracket already exists
+            $stmt_exact = $local_db->prepare("SELECT cost FROM ShippingRate WHERE min_weight = ? AND max_weight = ?");
 
-            $result = $stmt->execute([$new_cost, $min_weight, $max_weight]);
+            $stmt_exact->execute([$min_weight, $max_weight]);
 
-            if ($result && $stmt->rowCount() > 0)
+            if ($stmt_exact->fetch())
             {
+                $stmt = $local_db->prepare("UPDATE ShippingRATE SET cost = ? WHERE min_weight = ? AND max_weight = ?");
+
+                $result = $stmt->execute([$new_cost, $min_weight, $max_weight]);
+
                 echo json_encode([
                     "status" => "success",
-                    "message" => "Shipping rate updated successfully.",
-                    "new_cost" => $new_cost
+                    "message" => "Shipping rates updated."
                 ]);
+
+                exit;
+            }
+
+
+            // If not EXACT match, check for ANY overlapping ranges
+            $stmt_overlap = $local_db->prepare("SELECT rate_id FROM ShippingRate WHERE ? <= max_weight AND ? >= min_weight");
+
+            $stmt_overlap->execute([$min_weight, $max_weight]);
+
+            if ($stmt_overlap->fetch())
+            {
+                // Reject request due to overlapping weights
+                echo json_encode([
+                    "status" => "error",
+                    "message" => "Bracket overlaps with an existing range. Please adjust or remove the conflicting bracket first."
+                ]);
+            }
+
+            // No exact match or overlap --> insert new bracket
+            $stmt_insert = $local_db->prepare("INSERT INTO ShippingRate (min_weight, max_weight, cost) VALUES (?, ?, ?)");
+
+            $result = $stmt_insert->execute([$min_weight, $max_weight, $new_cost]);
+
+            if ($result)
+            {
+                echo json_encode(["status" => "success", "message" => "New shipping bracket created."]);
             }
             else
             {
-                echo json_encode([
-                    "status" => "error",
-                    "message" => "Failed to update shipping rate."
-                ]);
+                echo json_encode(["status" => "error", "message" => "Failed to create new bracket."]);
             }
+
+
             exit;
 
         default:
